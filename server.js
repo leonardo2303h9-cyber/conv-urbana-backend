@@ -2,13 +2,33 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
-app.use(cors());
+
+// ========== CONFIGURAÇÃO CORS ==========
+app.use(cors({
+  origin: '*', // Permite qualquer origem (para testes)
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // ========== BANCO DE DADOS ==========
-const db = new sqlite3.Database('./conv-urbana.db');
+// Usar caminho persistente se disponível (Render.com)
+const dbPath = process.env.RENDER ? '/data/conv-urbana.db' : './conv-urbana.db';
+console.log(`📁 Banco de dados em: ${dbPath}`);
+
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('❌ Erro ao abrir banco de dados:', err.message);
+  } else {
+    console.log('✅ Banco de dados conectado!');
+  }
+});
+
+// Forçar modo WAL para melhor performance
+db.run('PRAGMA journal_mode = WAL;');
 
 // ========== CRIAR TABELAS E ADMIN ==========
 db.serialize(() => {
@@ -21,7 +41,9 @@ db.serialize(() => {
       imagem TEXT,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `, (err) => {
+    if (err) console.error('❌ Erro ao criar tabela produtos:', err);
+  });
 
   // 2. Criar tabela de usuários
   db.run(`
@@ -37,7 +59,9 @@ db.serialize(() => {
       isAdmin INTEGER DEFAULT 0,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `, (err) => {
+    if (err) console.error('❌ Erro ao criar tabela usuarios:', err);
+  });
 
   // 3. Criar tabela de pedidos
   db.run(`
@@ -51,7 +75,9 @@ db.serialize(() => {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
     )
-  `);
+  `, (err) => {
+    if (err) console.error('❌ Erro ao criar tabela pedidos:', err);
+  });
 
   // 4. CRIAR ADMIN PADRÃO (se não existir)
   const adminEmail = 'admin@convurbana.com';
@@ -64,7 +90,6 @@ db.serialize(() => {
     }
     
     if (!row) {
-      // Admin não existe, criar
       db.run(
         `INSERT INTO usuarios (nome, email, telefone, endereco, numero, cep, senha, isAdmin) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -76,7 +101,7 @@ db.serialize(() => {
           '0',
           '00000-000',
           adminSenha,
-          1  // isAdmin = 1 (true)
+          1
         ],
         function(err) {
           if (err) {
@@ -102,7 +127,12 @@ db.serialize(() => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'online', database: 'SQLite', versao: '1.0.0' });
+  res.json({ 
+    status: 'online', 
+    database: 'SQLite', 
+    versao: '1.0.0',
+    environment: process.env.RENDER ? 'render' : 'local'
+  });
 });
 
 // ========== PRODUTOS ==========
@@ -110,6 +140,7 @@ app.get('/api/health', (req, res) => {
 app.get('/api/produtos', (req, res) => {
   db.all('SELECT * FROM produtos ORDER BY createdAt DESC', (err, rows) => {
     if (err) {
+      console.error('❌ Erro ao buscar produtos:', err);
       res.status(500).json({ erro: err.message });
       return;
     }
@@ -124,6 +155,7 @@ app.post('/api/produtos', (req, res) => {
     [nome, preco, imagem || ''],
     function(err) {
       if (err) {
+        console.error('❌ Erro ao adicionar produto:', err);
         res.status(500).json({ erro: err.message });
         return;
       }
@@ -139,6 +171,7 @@ app.put('/api/produtos/:id', (req, res) => {
     [nome, preco, imagem || '', req.params.id],
     function(err) {
       if (err) {
+        console.error('❌ Erro ao editar produto:', err);
         res.status(500).json({ erro: err.message });
         return;
       }
@@ -154,6 +187,7 @@ app.put('/api/produtos/:id', (req, res) => {
 app.delete('/api/produtos/:id', (req, res) => {
   db.run('DELETE FROM produtos WHERE id = ?', req.params.id, function(err) {
     if (err) {
+      console.error('❌ Erro ao remover produto:', err);
       res.status(500).json({ erro: err.message });
       return;
     }
@@ -173,7 +207,6 @@ app.post('/api/auth/register', (req, res) => {
   
   console.log('📝 Tentando cadastrar:', email);
   
-  // Verificar se o email já existe
   db.get('SELECT id FROM usuarios WHERE email = ?', [email], (err, row) => {
     if (err) {
       console.error('❌ Erro na verificação:', err);
@@ -257,6 +290,7 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/usuarios', (req, res) => {
   db.all('SELECT id, nome, email, telefone, endereco, numero, isAdmin FROM usuarios', (err, rows) => {
     if (err) {
+      console.error('❌ Erro ao listar usuários:', err);
       res.status(500).json({ erro: err.message });
       return;
     }
